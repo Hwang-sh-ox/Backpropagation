@@ -1,0 +1,454 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>순전파·역전파 시뮬레이터</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;700&display=swap">
+<style>
+/* Layout: 신경망 그림(왼쪽) + 계산 노트(오른쪽), 아래에 단계 타임라인과 실험 패널 */
+:root{
+  --bg:#eef2f4; --surface:#ffffff; --surface-2:#f6f8f9;
+  --ink:#16222c; --muted:#5a6976; --line:#d3dce2; --edge:#9aa9b5;
+  --fwd:#0a7a73; --fwd-soft:#e0f2f0;
+  --bwd:#c9501a; --bwd-soft:#fbeae1;
+  --upd:#6447bf; --upd-soft:#ece7fa;
+  --sans:"IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0e1418; --surface:#162027; --surface-2:#1b2730;
+  --ink:#e2e9ee; --muted:#95a4b1; --line:#2a3842; --edge:#5d6f7c;
+  --fwd:#3cc3b9; --fwd-soft:#143532; --bwd:#ff8b52; --bwd-soft:#3a2418; --upd:#a993f7; --upd-soft:#2a2346;
+  color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e1418; --surface:#162027; --surface-2:#1b2730;
+  --ink:#e2e9ee; --muted:#95a4b1; --line:#2a3842; --edge:#5d6f7c;
+  --fwd:#3cc3b9; --fwd-soft:#143532; --bwd:#ff8b52; --bwd-soft:#3a2418; --upd:#a993f7; --upd-soft:#2a2346;
+  color-scheme:dark}
+body{background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:15px; line-height:1.6}
+.wrap{max-width:1240px; margin:0 auto; padding-block:28px 48px;
+  padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px));
+  display:grid; gap:18px}
+header{display:flex; flex-wrap:wrap; align-items:end; justify-content:space-between; gap:12px 24px}
+h1{font-size:1.65rem; margin:0; letter-spacing:-.01em; text-wrap:balance}
+header p{margin:4px 0 0; color:var(--muted); max-width:62ch}
+.legend{display:flex; gap:14px; flex-wrap:wrap; font-size:.85rem; color:var(--muted)}
+.legend span{display:inline-flex; align-items:center; gap:6px}
+.legend i{width:18px; height:4px; border-radius:2px; display:inline-block}
+.main{display:grid; grid-template-columns:minmax(0,1.55fr) minmax(0,1fr); gap:18px; align-items:start}
+@media (max-width:920px){.main{grid-template-columns:minmax(0,1fr)}}
+.card{background:var(--surface); border:1px solid var(--line); border-radius:10px; min-width:0}
+.stage{padding:10px 10px 6px}
+.svgbox{overflow-x:auto}
+svg#net{display:block; width:100%; min-width:600px; height:auto; font-family:var(--mono)}
+.edge{fill:none; stroke:var(--edge); transition:stroke .25s}
+.edge.act-f{stroke:var(--fwd)} .edge.act-b{stroke:var(--bwd)} .edge.act-u{stroke:var(--upd)}
+.flow{fill:none; stroke-width:3; stroke-dasharray:3 9; stroke-linecap:round; opacity:0}
+.flow.on{opacity:1; animation:flow .9s linear infinite}
+.flow.f{stroke:var(--fwd)} .flow.b{stroke:var(--bwd); animation-direction:reverse} .flow.u{stroke:var(--upd)}
+@keyframes flow{to{stroke-dashoffset:-24}}
+@media (prefers-reduced-motion: reduce){.flow.on{animation:none}}
+.nd circle,.nd rect{fill:var(--surface); stroke:var(--edge); stroke-width:1.5; transition:all .25s}
+.nd.act-f circle,.nd.act-f rect{stroke:var(--fwd); stroke-width:3; fill:var(--fwd-soft)}
+.nd.act-b circle,.nd.act-b rect{stroke:var(--bwd); stroke-width:3; fill:var(--bwd-soft)}
+.nd.act-u circle,.nd.act-u rect{stroke:var(--upd); stroke-width:3; fill:var(--upd-soft)}
+.nd .nm{font-size:11px; fill:var(--muted); font-family:var(--sans)}
+.nd .val{font-size:14px; font-weight:600; fill:var(--ink)}
+.nd .sm{font-size:10px; fill:var(--muted)}
+.lab{font-size:12px; paint-order:stroke; stroke:var(--surface); stroke-width:5px; stroke-linejoin:round}
+.lab.w{fill:var(--ink)} .lab.g{fill:var(--bwd)} .lab.u{fill:var(--upd); font-weight:600}
+.lab.fresh{font-weight:700}
+.hid{opacity:0; transition:opacity .3s}
+.stage-foot{display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px 16px; padding:4px 8px 6px; font-size:.82rem; color:var(--muted)}
+
+.calc{padding:18px 20px 20px; display:grid; gap:14px}
+.calc-top{display:flex; justify-content:space-between; align-items:center; gap:10px}
+.badge{font-size:.78rem; font-weight:700; letter-spacing:.06em; padding:3px 10px; border-radius:999px; background:var(--surface-2); color:var(--muted)}
+.badge.f{background:var(--fwd-soft); color:var(--fwd)} .badge.b{background:var(--bwd-soft); color:var(--bwd)} .badge.u{background:var(--upd-soft); color:var(--upd)}
+.count{font-family:var(--mono); font-size:.82rem; color:var(--muted)}
+.calc h2{margin:0; font-size:1.2rem; text-wrap:balance}
+.blk{display:grid; gap:4px}
+.blk .lb{font-size:.72rem; font-weight:700; letter-spacing:.08em; color:var(--muted)}
+.math{font-family:var(--mono); font-size:.92rem; background:var(--surface-2); border-radius:6px; padding:10px 12px; overflow-x:auto; line-height:1.75; white-space:nowrap}
+.math.res{border-left:3px solid var(--fwd); font-weight:600}
+.calc.b .math.res{border-left-color:var(--bwd)} .calc.u .math.res{border-left-color:var(--upd)}
+.math sub,.math sup{font-size:.72em}
+.explain{margin:0; max-width:60ch}
+table.upd{border-collapse:collapse; font-family:var(--mono); font-size:.85rem; font-variant-numeric:tabular-nums}
+table.upd th{font-family:var(--sans); font-size:.72rem; color:var(--muted); text-align:right; padding:2px 8px; font-weight:500}
+table.upd td{text-align:right; padding:2px 8px}
+table.upd td:first-child,table.upd th:first-child{text-align:left}
+table.upd td.g{color:var(--bwd)} table.upd td.nw{color:var(--upd); font-weight:600}
+
+.controls{display:flex; flex-wrap:wrap; gap:8px; align-items:center}
+button{font:inherit; font-size:.9rem; border:1px solid var(--line); background:var(--surface); color:var(--ink); border-radius:7px; padding:7px 14px; cursor:pointer}
+button:hover{border-color:var(--edge)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--fwd); outline-offset:2px}
+button.primary{background:var(--ink); color:var(--surface); border-color:var(--ink); font-weight:600}
+button:disabled{opacity:.4; cursor:default}
+.sep{flex:1}
+.tl{padding:14px 16px; display:grid; gap:10px}
+.tl-groups{display:grid; grid-template-columns:auto minmax(0,1fr); gap:8px 14px; align-items:center}
+.tl-groups .gl{font-size:.78rem; font-weight:700; color:var(--muted)}
+.chips{display:flex; flex-wrap:wrap; gap:6px}
+.chip{font-family:var(--mono); font-size:.78rem; padding:4px 9px; border-radius:6px; background:var(--surface-2); border:1px solid transparent; color:var(--muted)}
+.chip.done.f{color:var(--fwd)} .chip.done.b{color:var(--bwd)} .chip.done.u{color:var(--upd)}
+.chip.cur.f{background:var(--fwd); color:var(--surface)} .chip.cur.b{background:var(--bwd); color:var(--surface)} .chip.cur.u{background:var(--upd); color:var(--surface)}
+.chip sub{font-size:.75em}
+
+.lower{display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,1fr); gap:18px}
+@media (max-width:920px){.lower{grid-template-columns:minmax(0,1fr)}}
+.pane{padding:16px 18px; display:grid; gap:12px; align-content:start}
+.pane h3{margin:0; font-size:1rem}
+.pane .hint{margin:0; font-size:.85rem; color:var(--muted)}
+.fields{display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:8px 10px}
+.fields label{display:grid; gap:2px; font-family:var(--mono); font-size:.8rem; color:var(--muted)}
+.fields input{font:inherit; font-family:var(--mono); font-size:.9rem; width:100%; box-sizing:border-box; padding:5px 7px; border:1px solid var(--line); border-radius:6px; background:var(--surface-2); color:var(--ink)}
+.subh{font-size:.75rem; font-weight:700; letter-spacing:.08em; color:var(--muted)}
+.stats{display:flex; gap:24px; flex-wrap:wrap; font-variant-numeric:tabular-nums}
+.stats div{display:grid}
+.stats b{font-family:var(--mono); font-size:1.3rem}
+.stats span{font-size:.78rem; color:var(--muted)}
+svg#chart{width:100%; height:auto; display:block; font-family:var(--mono)}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>순전파·역전파 시뮬레이터</h1>
+      <p>입력 2개 → 은닉 뉴런 2개 → 출력 1개인 작은 신경망입니다. 한 단계씩 넘기면서 값이 앞으로 흐르고(순전파), 오차가 거꾸로 흘러 기울기가 되는(역전파) 계산을 실제 숫자로 확인하세요.</p>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--fwd)"></i>순전파 · 값</span>
+      <span><i style="background:var(--bwd)"></i>역전파 · 기울기 ∂</span>
+      <span><i style="background:var(--upd)"></i>갱신 · 새 가중치 →</span>
+    </div>
+  </header>
+
+  <div class="main">
+    <div style="display:grid; gap:18px; min-width:0">
+      <div class="card stage">
+        <div class="svgbox"><svg id="net" viewBox="0 0 700 378" role="img" aria-label="신경망 그림"></svg></div>
+        <div class="stage-foot"><span>활성화 함수: 시그모이드 σ(z) = 1/(1+e<sup>−z</sup>) · 손실: ½(y−ŷ)²</span><span>점선 연결 = 음수 가중치 · 굵기 = 가중치 크기</span></div>
+      </div>
+      <div class="card tl">
+        <div class="controls">
+          <button id="prev" aria-label="이전 단계">◀ 이전</button>
+          <button id="next" class="primary">다음 단계 ▶</button>
+          <button id="play">자동 재생</button>
+          <span class="sep"></span>
+          <button id="once" title="남은 단계를 건너뛰고 가중치를 한 번 갱신합니다">1회 학습</button>
+          <button id="hundred">100회 학습</button>
+        </div>
+        <div class="tl-groups" id="timeline"></div>
+      </div>
+    </div>
+
+    <div class="card calc" id="calc" aria-live="polite">
+      <div class="calc-top"><span class="badge" id="badge"></span><span class="count" id="count"></span></div>
+      <h2 id="ttl"></h2>
+      <div id="body" style="display:grid; gap:14px"></div>
+    </div>
+  </div>
+
+  <div class="lower">
+    <div class="card pane">
+      <h3>값 바꿔 보기</h3>
+      <p class="hint">숫자를 바꾸면 모든 계산이 즉시 다시 됩니다. 학습 기록은 처음부터 다시 시작해요.</p>
+      <div class="subh">데이터와 학습률</div>
+      <div class="fields" id="f-data"></div>
+      <div class="subh">가중치와 편향</div>
+      <div class="fields" id="f-w"></div>
+      <div class="controls">
+        <button id="reset">처음 값으로</button>
+        <button id="rand">무작위 가중치</button>
+      </div>
+    </div>
+    <div class="card pane">
+      <h3>손실 변화</h3>
+      <div class="stats">
+        <div><b id="st-it">0</b><span>학습 횟수</span></div>
+        <div><b id="st-l0">–</b><span>처음 손실</span></div>
+        <div><b id="st-l">–</b><span>현재 손실</span></div>
+        <div><b id="st-y">–</b><span>현재 예측 ŷ</span></div>
+      </div>
+      <svg id="chart" viewBox="0 0 360 170" role="img" aria-label="학습 횟수에 따른 손실 그래프"></svg>
+      <p class="hint">기울기의 반대 방향으로 조금씩 움직이면 손실이 줄고 예측 ŷ가 정답 y에 가까워집니다. 학습률 η를 키우거나 줄여서 속도 차이를 비교해 보세요.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const DEF={x1:.05,x2:.10,y:.01,lr:.5,w1:.15,w2:.20,w3:.25,w4:.30,b1:.35,b2:.35,w5:.40,w6:.45,b3:.60};
+const PK=['w1','w2','w3','w4','w5','w6','b1','b2','b3'];
+const NM={w1:'w₁',w2:'w₂',w3:'w₃',w4:'w₄',w5:'w₅',w6:'w₆',b1:'b₁',b2:'b₂',b3:'b₃',x1:'x₁',x2:'x₂',y:'y (정답)',lr:'η (학습률)'};
+let P={...DEF}, step=0, iter=0, hist=[], lastChange=null, timer=null;
+
+const sig=z=>1/(1+Math.exp(-z));
+function compute(p){
+  const c={g:{}};
+  c.zh1=p.w1*p.x1+p.w2*p.x2+p.b1; c.h1=sig(c.zh1);
+  c.zh2=p.w3*p.x1+p.w4*p.x2+p.b2; c.h2=sig(c.zh2);
+  c.zo=p.w5*c.h1+p.w6*c.h2+p.b3; c.o=sig(c.zo);
+  c.L=.5*(p.y-c.o)**2;
+  c.dLdo=c.o-p.y; c.dpo=c.o*(1-c.o); c.d_o=c.dLdo*c.dpo;
+  c.g.w5=c.d_o*c.h1; c.g.w6=c.d_o*c.h2; c.g.b3=c.d_o;
+  c.dh1=c.d_o*p.w5; c.dh2=c.d_o*p.w6;
+  c.dp1=c.h1*(1-c.h1); c.dp2=c.h2*(1-c.h2);
+  c.d_h1=c.dh1*c.dp1; c.d_h2=c.dh2*c.dp2;
+  c.g.w1=c.d_h1*p.x1; c.g.w2=c.d_h1*p.x2; c.g.b1=c.d_h1;
+  c.g.w3=c.d_h2*p.x1; c.g.w4=c.d_h2*p.x2; c.g.b2=c.d_h2;
+  c.nw={}; PK.forEach(k=>c.nw[k]=p[k]-p.lr*c.g[k]);
+  return c;
+}
+const n=v=>{const a=Math.abs(v); return (a!==0&&a<0.01)?v.toFixed(6):v.toFixed(4)};
+const m=v=>v<0?`(${n(v)})`:n(v);
+const BR='<br>';
+
+const STEPS=[
+ {ph:'i', short:'시작'},
+ {ph:'f', short:'z<sub>h1</sub>', t:'h₁ 뉴런: 입력을 가중치로 더하기', N:['x1','x2','h1'], E:['w1','w2'], rev:['zh1'],
+  f:()=>'z<sub>h₁</sub> = w₁·x₁ + w₂·x₂ + b₁',
+  s:p=>`= ${m(p.w1)} × ${m(p.x1)} + ${m(p.w2)} × ${m(p.x2)} + ${m(p.b1)}`,
+  r:(p,c)=>`z<sub>h₁</sub> = ${n(c.zh1)}`,
+  e:'각 입력에 연결 가중치를 곱해서 모두 더하고, 편향 b₁을 더합니다. 가중치는 “이 입력을 얼마나 중요하게 볼지”를 나타내는 숫자예요.'},
+ {ph:'f', short:'h1=σ', t:'h₁ 뉴런: 시그모이드 통과', N:['h1'], E:[], rev:['h1'],
+  f:()=>'h₁ = σ(z<sub>h₁</sub>) = 1 / (1 + e<sup>−z</sup>)',
+  s:(p,c)=>`= 1 / (1 + e<sup>−${m(c.zh1)}</sup>)${BR}= 1 / (1 + ${n(Math.exp(-c.zh1))})`,
+  r:(p,c)=>`h₁ = ${n(c.h1)}`,
+  e:'시그모이드는 어떤 수든 0과 1 사이 값으로 눌러 줍니다. z가 클수록 1에, 작을수록 0에 가까워져요. 이 값이 h₁의 출력입니다.'},
+ {ph:'f', short:'z<sub>h2</sub>', t:'h₂ 뉴런: 입력을 가중치로 더하기', N:['x1','x2','h2'], E:['w3','w4'], rev:['zh2'],
+  f:()=>'z<sub>h₂</sub> = w₃·x₁ + w₄·x₂ + b₂',
+  s:p=>`= ${m(p.w3)} × ${m(p.x1)} + ${m(p.w4)} × ${m(p.x2)} + ${m(p.b2)}`,
+  r:(p,c)=>`z<sub>h₂</sub> = ${n(c.zh2)}`,
+  e:'h₂도 같은 방식입니다. 입력은 같지만 연결 가중치가 달라서 h₁과 다른 값이 나옵니다.'},
+ {ph:'f', short:'h2=σ', t:'h₂ 뉴런: 시그모이드 통과', N:['h2'], E:[], rev:['h2'],
+  f:()=>'h₂ = σ(z<sub>h₂</sub>)',
+  s:(p,c)=>`= 1 / (1 + e<sup>−${m(c.zh2)}</sup>)${BR}= 1 / (1 + ${n(Math.exp(-c.zh2))})`,
+  r:(p,c)=>`h₂ = ${n(c.h2)}`,
+  e:'이제 은닉층 계산이 끝났습니다. h₁, h₂가 다음 층의 입력이 됩니다.'},
+ {ph:'f', short:'z<sub>ŷ</sub>', t:'출력 뉴런: 은닉층 값을 더하기', N:['h1','h2','o'], E:['w5','w6'], rev:['zo'],
+  f:()=>'z<sub>ŷ</sub> = w₅·h₁ + w₆·h₂ + b₃',
+  s:(p,c)=>`= ${m(p.w5)} × ${m(c.h1)} + ${m(p.w6)} × ${m(c.h2)} + ${m(p.b3)}`,
+  r:(p,c)=>`z<sub>ŷ</sub> = ${n(c.zo)}`,
+  e:'출력 뉴런은 은닉 뉴런의 출력을 입력으로 받아 똑같이 가중합을 계산합니다.'},
+ {ph:'f', short:'ŷ=σ', t:'출력 뉴런: 최종 예측', N:['o'], E:[], rev:['o'],
+  f:()=>'ŷ = σ(z<sub>ŷ</sub>)',
+  s:(p,c)=>`= 1 / (1 + e<sup>−${m(c.zo)}</sup>)${BR}= 1 / (1 + ${n(Math.exp(-c.zo))})`,
+  r:(p,c)=>`ŷ = ${n(c.o)}`,
+  e:'이 값이 신경망의 예측입니다. 정답 y와 얼마나 다른지 확인해 볼 차례예요.'},
+ {ph:'f', short:'L', t:'손실: 예측이 얼마나 틀렸나', N:['o','L'], E:['L'], rev:['L'],
+  f:()=>'L = ½ (y − ŷ)²',
+  s:(p,c)=>`= ½ × (${m(p.y)} − ${m(c.o)})²${BR}= ½ × ${m(p.y-c.o)}²`,
+  r:(p,c)=>`L = ${n(c.L)}`,
+  e:'차이를 제곱해서 항상 양수로 만들고, 미분했을 때 깔끔해지도록 ½을 곱합니다. 순전파는 여기까지. 이제 이 손실을 줄이려면 각 가중치를 어느 방향으로 바꿔야 하는지 거꾸로 계산합니다.'},
+ {ph:'b', short:'∂L/∂ŷ', t:'역전파 출발: 손실을 ŷ로 미분', N:['L','o'], E:['L'], rev:['dLdo'],
+  f:()=>'∂L/∂ŷ = −(y − ŷ) = ŷ − y',
+  s:(p,c)=>`= ${m(c.o)} − ${m(p.y)}`,
+  r:(p,c)=>`∂L/∂ŷ = ${n(c.dLdo)}`,
+  e:'“ŷ를 조금 키우면 손실이 얼마나 변하나”를 뜻합니다. 양수라면 ŷ가 정답보다 크다는 뜻이고, ŷ를 줄여야 손실이 작아집니다.'},
+ {ph:'b', short:'δ<sub>ŷ</sub>', t:'시그모이드를 거꾸로 통과 (연쇄 법칙)', N:['o'], E:[], rev:['do'],
+  f:()=>'δ<sub>ŷ</sub> = ∂L/∂z<sub>ŷ</sub> = ∂L/∂ŷ · σ′(z<sub>ŷ</sub>)'+BR+'σ′(z) = σ(z)·(1 − σ(z)) = ŷ(1 − ŷ)',
+  s:(p,c)=>`σ′ = ${n(c.o)} × (1 − ${n(c.o)}) = ${n(c.dpo)}${BR}δ<sub>ŷ</sub> = ${m(c.dLdo)} × ${m(c.dpo)}`,
+  r:(p,c)=>`δ<sub>ŷ</sub> = ${n(c.d_o)}`,
+  e:'ŷ는 z를 시그모이드에 넣어 만든 값이므로, 연쇄 법칙에 따라 시그모이드의 기울기를 곱합니다. δ는 “이 뉴런의 가중합 z가 손실에 주는 영향”이에요. 앞으로 계속 쓰입니다.'},
+ {ph:'b', short:'∂w₅ ∂w₆ ∂b₃', t:'출력층 가중치의 기울기', N:['h1','h2','o'], E:['w5','w6'], rev:['gO'],
+  f:()=>'∂L/∂w₅ = δ<sub>ŷ</sub> · h₁'+BR+'∂L/∂w₆ = δ<sub>ŷ</sub> · h₂'+BR+'∂L/∂b₃ = δ<sub>ŷ</sub> · 1',
+  s:(p,c)=>`= ${m(c.d_o)} × ${m(c.h1)}${BR}= ${m(c.d_o)} × ${m(c.h2)}${BR}= ${m(c.d_o)} × 1`,
+  r:(p,c)=>`∂L/∂w₅ = ${n(c.g.w5)}${BR}∂L/∂w₆ = ${n(c.g.w6)}${BR}∂L/∂b₃ = ${n(c.g.b3)}`,
+  e:'z<sub>ŷ</sub> = w₅h₁ + w₆h₂ + b₃ 를 w₅로 미분하면 h₁이 남습니다. 그래서 가중치의 기울기는 항상 “δ × 그 가중치로 들어온 입력”이에요. 편향의 입력은 1로 봅니다.'},
+ {ph:'b', short:'∂h₁ ∂h₂', t:'오차를 은닉층으로 나눠 보내기', N:['o','h1','h2'], E:['w5','w6'], rev:['dh'],
+  f:()=>'∂L/∂h₁ = δ<sub>ŷ</sub> · w₅'+BR+'∂L/∂h₂ = δ<sub>ŷ</sub> · w₆',
+  s:(p,c)=>`= ${m(c.d_o)} × ${m(p.w5)}${BR}= ${m(c.d_o)} × ${m(p.w6)}`,
+  r:(p,c)=>`∂L/∂h₁ = ${n(c.dh1)}${BR}∂L/∂h₂ = ${n(c.dh2)}`,
+  e:'z<sub>ŷ</sub>를 h₁로 미분하면 w₅입니다. 즉 연결 가중치가 큰 뉴런일수록 오차에 대한 책임을 더 많이 나눠 받습니다. 아직 갱신 전의 원래 가중치를 사용해요.'},
+ {ph:'b', short:'δ<sub>h1</sub> δ<sub>h2</sub>', t:'은닉 뉴런의 시그모이드를 거꾸로 통과', N:['h1','h2'], E:[], rev:['dH'],
+  f:()=>'δ<sub>h₁</sub> = ∂L/∂h₁ · h₁(1 − h₁)'+BR+'δ<sub>h₂</sub> = ∂L/∂h₂ · h₂(1 − h₂)',
+  s:(p,c)=>`= ${m(c.dh1)} × ${n(c.h1)} × (1 − ${n(c.h1)})${BR}= ${m(c.dh2)} × ${n(c.h2)} × (1 − ${n(c.h2)})`,
+  r:(p,c)=>`δ<sub>h₁</sub> = ${n(c.d_h1)}${BR}δ<sub>h₂</sub> = ${n(c.d_h2)}`,
+  e:'출력 뉴런에서 했던 것과 똑같이 시그모이드의 기울기 h(1 − h)를 곱합니다. 시그모이드 기울기는 최대 0.25라서, 층을 거꾸로 지날수록 기울기가 작아지는 경향이 있어요.'},
+ {ph:'b', short:'∂w₁…∂b₂', t:'은닉층 가중치의 기울기', N:['x1','x2','h1','h2'], E:['w1','w2','w3','w4'], rev:['gH'],
+  f:()=>'∂L/∂w₁ = δ<sub>h₁</sub>·x₁ &nbsp; ∂L/∂w₂ = δ<sub>h₁</sub>·x₂ &nbsp; ∂L/∂b₁ = δ<sub>h₁</sub>'+BR+'∂L/∂w₃ = δ<sub>h₂</sub>·x₁ &nbsp; ∂L/∂w₄ = δ<sub>h₂</sub>·x₂ &nbsp; ∂L/∂b₂ = δ<sub>h₂</sub>',
+  s:(p,c)=>`∂L/∂w₁ = ${m(c.d_h1)} × ${m(p.x1)}${BR}∂L/∂w₂ = ${m(c.d_h1)} × ${m(p.x2)}${BR}∂L/∂w₃ = ${m(c.d_h2)} × ${m(p.x1)}${BR}∂L/∂w₄ = ${m(c.d_h2)} × ${m(p.x2)}`,
+  r:(p,c)=>`∂L/∂w₁ = ${n(c.g.w1)} &nbsp; ∂L/∂w₂ = ${n(c.g.w2)} &nbsp; ∂L/∂b₁ = ${n(c.g.b1)}${BR}∂L/∂w₃ = ${n(c.g.w3)} &nbsp; ∂L/∂w₄ = ${n(c.g.w4)} &nbsp; ∂L/∂b₂ = ${n(c.g.b2)}`,
+  e:'출력층과 같은 규칙, “δ × 들어온 입력”입니다. 입력 x가 작으면 기울기도 작아서 그 가중치는 조금만 바뀝니다. 이렇게 모든 가중치의 기울기를 구했습니다.'},
+ {ph:'u', short:'갱신', t:'경사하강법으로 가중치 갱신', N:['x1','x2','h1','h2','o'], E:['w1','w2','w3','w4','w5','w6'], rev:['upd'],
+  f:()=>'w<sub>새</sub> = w − η · ∂L/∂w',
+  s:(p,c)=>`<table class="upd"><tr><th></th><th>기존</th><th>η × 기울기</th><th>새 값</th></tr>`+
+    PK.map(k=>`<tr><td>${NM[k]}</td><td>${n(p[k])}</td><td class="g">− ${m(p.lr*c.g[k])}</td><td class="nw">${n(c.nw[k])}</td></tr>`).join('')+`</table>`,
+  r:(p,c)=>{const L2=compute({...p,...c.nw}).L; return `손실 ${n(c.L)} → ${n(L2)} <span style="font-weight:400">(새 가중치로 다시 순전파한 결과)</span>`},
+  e:'기울기는 “손실이 커지는 방향”이므로, 그 반대 방향으로 학습률 η만큼 움직입니다. 모든 가중치를 동시에 바꾼 뒤, 다음 단계에서 새 가중치로 다시 순전파를 시작합니다.'},
+];
+const LAST=STEPS.length-1;
+
+/* ---------- 신경망 그림 ---------- */
+const ND={x1:{x:70,y:95,r:30,nm:'x₁'},x2:{x:70,y:285,r:30,nm:'x₂'},h1:{x:300,y:95,r:36,nm:'h₁'},h2:{x:300,y:285,r:36,nm:'h₂'},o:{x:500,y:175,r:36,nm:'ŷ'}};
+const ED={w1:['x1','h1',.5],w2:['x2','h1',.3],w3:['x1','h2',.3],w4:['x2','h2',.5],w5:['h1','o',.58],w6:['h2','o',.58]};
+const BIAS={b1:{x:300,y:[18,32,46],a:'middle'},b2:{x:300,y:[338,352,366],a:'middle'},b3:{x:545,y:[136,150,164],a:'start'}};
+const svg=document.getElementById('net');
+function seg(a,b){const A=ND[a],B=ND[b],dx=B.x-A.x,dy=B.y-A.y,d=Math.hypot(dx,dy);
+  return [A.x+dx/d*A.r,A.y+dy/d*A.r,B.x-dx/d*B.r,B.y-dy/d*B.r]}
+function build(){
+  let h='';
+  for(const k in ED){const [x1,y1,x2,y2]=seg(ED[k][0],ED[k][1]);
+    h+=`<line class="edge" id="e-${k}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/><line class="flow" id="fl-${k}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`}
+  h+=`<line class="edge" id="e-L" x1="500" y1="211" x2="500" y2="262" stroke-width="2"/><line class="flow" id="fl-L" x1="500" y1="211" x2="500" y2="262"/>`;
+  for(const k in ED){const A=ND[ED[k][0]],B=ND[ED[k][1]],t=ED[k][2],x=A.x+(B.x-A.x)*t,y=A.y+(B.y-A.y)*t;
+    h+=`<text class="lab w" id="lw-${k}" x="${x}" y="${y-8}" text-anchor="middle"></text>
+        <text class="lab g" id="lg-${k}" data-k="${+k[1]>4?'gO':'gH'}" x="${x}" y="${y+16}" text-anchor="middle"></text>
+        <text class="lab u" id="lu-${k}" data-k="upd" x="${x}" y="${y+30}" text-anchor="middle"></text>`}
+  for(const k in BIAS){const b=BIAS[k];
+    h+=`<text class="lab w" id="lw-${k}" x="${b.x}" y="${b.y[0]}" text-anchor="${b.a}"></text>
+        <text class="lab g" id="lg-${k}" data-k="${k==='b3'?'gO':'gH'}" x="${b.x}" y="${b.y[1]}" text-anchor="${b.a}"></text>
+        <text class="lab u" id="lu-${k}" data-k="upd" x="${b.x}" y="${b.y[2]}" text-anchor="${b.a}"></text>`}
+  for(const k in ND){const d=ND[k],inp=k[0]==='x';
+    h+=`<g class="nd" id="n-${k}"><circle cx="${d.x}" cy="${d.y}" r="${d.r}"/>
+      <text class="nm" x="${d.x}" y="${d.y-(inp?10:15)}" text-anchor="middle">${d.nm}</text>
+      <text class="val" id="v-${k}" x="${d.x}" y="${d.y+(inp?9:5)}" text-anchor="middle"></text>
+      ${inp?'':`<text class="sm" id="z-${k}" x="${d.x}" y="${d.y+21}" text-anchor="middle"></text>`}</g>`}
+  h+=`<g class="nd" id="n-L"><rect x="440" y="262" width="120" height="76" rx="8"/>
+      <text class="nm" x="500" y="282" text-anchor="middle">손실 L</text>
+      <text class="val" id="v-L" x="500" y="304" text-anchor="middle"></text>
+      <text class="sm" id="v-y" x="500" y="324" text-anchor="middle"></text></g>`;
+  h+=`<text class="lab g" id="d-h1a" data-k="dh" x="290" y="152" text-anchor="middle"></text>
+      <text class="lab g" id="d-h1b" data-k="dH" x="290" y="168" text-anchor="middle"></text>
+      <text class="lab g" id="d-h2a" data-k="dh" x="290" y="222" text-anchor="middle"></text>
+      <text class="lab g" id="d-h2b" data-k="dH" x="290" y="238" text-anchor="middle"></text>
+      <text class="lab g" id="d-oa" data-k="dLdo" x="545" y="186" text-anchor="start"></text>
+      <text class="lab g" id="d-ob" data-k="do" x="545" y="202" text-anchor="start"></text>`;
+  svg.innerHTML=h;
+}
+const $=id=>document.getElementById(id);
+function setT(id,txt,show){const el=$(id); el.textContent=txt; el.classList.toggle('hid',!show)}
+
+function revealed(){const s=new Set(); for(let i=1;i<=step;i++)(STEPS[i].rev||[]).forEach(k=>s.add(k)); return s}
+
+function renderNet(c){
+  const R=revealed(), st=STEPS[step], ph=st.ph, fresh=new Set(st.rev||[]);
+  for(const k in ED){const w=P[k],el=$('e-'+k);
+    el.setAttribute('stroke-width',(1+4*Math.min(Math.abs(w),1.5)/1.5).toFixed(2));
+    el.setAttribute('stroke-dasharray',w<0?'6 4':'none')}
+  PK.forEach(k=>{
+    setT('lw-'+k,`${NM[k]} ${n(P[k])}`,true);
+    const gk=$('lg-'+k).dataset.k;
+    setT('lg-'+k,`∂ ${n(c.g[k])}`,R.has(gk));
+    setT('lu-'+k,`→ ${n(c.nw[k])}`,R.has('upd'));
+  });
+  setT('v-x1',n(P.x1),true); setT('v-x2',n(P.x2),true);
+  setT('v-h1',R.has('h1')?n(c.h1):'?',true); setT('z-h1',`z ${n(c.zh1)}`,R.has('zh1'));
+  setT('v-h2',R.has('h2')?n(c.h2):'?',true); setT('z-h2',`z ${n(c.zh2)}`,R.has('zh2'));
+  setT('v-o',R.has('o')?n(c.o):'?',true); setT('z-o',`z ${n(c.zo)}`,R.has('zo'));
+  setT('v-L',R.has('L')?n(c.L):'?',true); setT('v-y',`정답 y = ${n(P.y)}`,true);
+  setT('d-h1a',`∂L/∂h₁ ${n(c.dh1)}`,R.has('dh')); setT('d-h1b',`δ ${n(c.d_h1)}`,R.has('dH'));
+  setT('d-h2a',`∂L/∂h₂ ${n(c.dh2)}`,R.has('dh')); setT('d-h2b',`δ ${n(c.d_h2)}`,R.has('dH'));
+  setT('d-oa',`∂L/∂ŷ ${n(c.dLdo)}`,R.has('dLdo')); setT('d-ob',`δ ${n(c.d_o)}`,R.has('do'));
+  svg.querySelectorAll('.lab[data-k]').forEach(el=>el.classList.toggle('fresh',fresh.has(el.dataset.k)));
+  const cls=['act-f','act-b','act-u'], a='act-'+ph;
+  svg.querySelectorAll('.nd').forEach(g=>{g.classList.remove(...cls); if((st.N||[]).includes(g.id.slice(2))) g.classList.add(a)});
+  svg.querySelectorAll('.edge').forEach(e=>{e.classList.remove(...cls); if((st.E||[]).includes(e.id.slice(2))) e.classList.add(a)});
+  svg.querySelectorAll('.flow').forEach(f=>{const on=(st.E||[]).includes(f.id.slice(3)); f.setAttribute('class','flow'+(on?' on '+ph:''))});
+}
+
+function renderCalc(c){
+  const st=STEPS[step], calc=$('calc');
+  calc.className='card calc '+st.ph;
+  const B=$('badge'); B.className='badge '+st.ph;
+  B.textContent={i:'준비',f:'순전파',b:'역전파',u:'갱신'}[st.ph];
+  $('count').textContent=`단계 ${step} / ${LAST}`;
+  if(st.ph==='i'){
+    $('ttl').textContent=iter===0?'한 단계씩 따라가 봅시다':`${iter}번째 학습 완료`;
+    let msg='';
+    if(lastChange) msg=`<div class="blk"><span class="lb">방금 갱신 결과</span><div class="math res">손실 ${n(lastChange[0])} → ${n(lastChange[1])} (${((1-lastChange[1]/lastChange[0])*100).toFixed(2)}% 감소)</div></div>`;
+    $('body').innerHTML=msg+`<p class="explain">입력 x₁, x₂가 들어가 예측 ŷ를 만들고, 정답 y와 비교해 손실 L을 구하는 것이 <b style="color:var(--fwd)">순전파</b>입니다. 그 손실을 줄이려면 각 가중치를 어느 쪽으로 얼마나 바꿔야 하는지를, 손실에서 출발해 거꾸로 미분하며 구하는 것이 <b style="color:var(--bwd)">역전파</b>예요.</p>
+      <p class="explain">“다음 단계”를 누르거나 키보드 → 키로 진행하세요. 각 단계마다 공식, 숫자를 넣은 식, 결과가 여기에 나타나고 그림에서는 해당 부분이 강조됩니다.</p>
+      <div class="blk"><span class="lb">현재 가중치로 예측하면</span><div class="math">ŷ = ${n(c.o)}, 정답 y = ${n(P.y)}, 손실 L = ${n(c.L)}</div></div>`;
+    return;
+  }
+  $('ttl').textContent=st.t;
+  $('body').innerHTML=`
+    <div class="blk"><span class="lb">공식</span><div class="math">${st.f(P,c)}</div></div>
+    <div class="blk"><span class="lb">숫자 대입</span><div class="math">${st.s(P,c)}</div></div>
+    <div class="blk"><span class="lb">결과</span><div class="math res">${st.r(P,c)}</div></div>
+    <p class="explain">${st.e}</p>`;
+}
+
+function buildTimeline(){
+  const groups=[['f','순전파'],['b','역전파'],['u','갱신']];
+  $('timeline').innerHTML=groups.map(([ph,lb])=>`<span class="gl">${lb}</span><div class="chips">`+
+    STEPS.map((s,i)=>s.ph===ph?`<button class="chip ${ph}" data-i="${i}" title="${s.t}">${s.short}</button>`:'').join('')+`</div>`).join('');
+  $('timeline').addEventListener('click',e=>{const b=e.target.closest('.chip'); if(b){stop(); step=+b.dataset.i; render()}});
+}
+function renderTimeline(){
+  document.querySelectorAll('.chip').forEach(ch=>{const i=+ch.dataset.i;
+    ch.classList.toggle('done',i<step); ch.classList.toggle('cur',i===step)})
+}
+
+function chart(){
+  const W=360,H=170,l=52,r=12,t=12,b=28,el=$('chart');
+  const mx=Math.max(...hist)*1.08||1, N=Math.max(hist.length-1,1);
+  const X=i=>l+(W-l-r)*i/N, Y=v=>t+(H-t-b)*(1-v/mx);
+  let s='';
+  [0,.5,1].forEach(f=>{const v=mx*f,y=Y(v);
+    s+=`<line x1="${l}" x2="${W-r}" y1="${y}" y2="${y}" stroke="var(--line)"/><text x="${l-6}" y="${y+4}" font-size="10" text-anchor="end" fill="var(--muted)">${v.toFixed(4)}</text>`});
+  s+=`<text x="${l}" y="${H-8}" font-size="10" fill="var(--muted)">0</text><text x="${W-r}" y="${H-8}" font-size="10" text-anchor="end" fill="var(--muted)">${hist.length-1}회</text>`;
+  if(hist.length>1){
+    const pts=hist.map((v,i)=>`${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
+    s+=`<polygon points="${l},${Y(0)} ${pts} ${X(hist.length-1)},${Y(0)}" fill="var(--upd)" opacity=".12"/>`;
+    s+=`<polyline points="${pts}" fill="none" stroke="var(--upd)" stroke-width="2"/>`;
+  }
+  const lx=X(hist.length-1), ly=Y(hist[hist.length-1]);
+  s+=`<circle cx="${hist.length>1?lx:l}" cy="${ly}" r="4" fill="var(--upd)"/>`;
+  if(hist.length===1) s+=`<text x="${(l+W-r)/2}" y="${(t+H-b)/2}" font-size="11" text-anchor="middle" fill="var(--muted)" font-family="var(--sans)">학습을 진행하면 손실 곡선이 그려집니다</text>`;
+  el.innerHTML=s;
+  $('st-it').textContent=iter; $('st-l0').textContent=n(hist[0]);
+  const c=compute(P); $('st-l').textContent=n(c.L); $('st-y').textContent=n(c.o);
+}
+
+function render(){
+  const c=compute(P);
+  renderNet(c); renderCalc(c); renderTimeline(); chart();
+  $('prev').disabled=step===0;
+  $('next').textContent=step===LAST?'갱신 적용하고 다시 ▶':'다음 단계 ▶';
+}
+
+function applyUpdate(){
+  const c=compute(P), L0=c.L;
+  PK.forEach(k=>P[k]=c.nw[k]);
+  iter++; const L1=compute(P).L; hist.push(L1); lastChange=[L0,L1];
+  syncInputs();
+}
+function next(){ if(step<LAST) step++; else {applyUpdate(); step=0} render() }
+function prev(){ if(step>0){step--; render()} }
+function stop(){ if(timer){clearInterval(timer); timer=null; $('play').textContent='자동 재생'} }
+$('next').onclick=()=>{stop(); next()};
+$('prev').onclick=()=>{stop(); prev()};
+$('play').onclick=()=>{
+  if(timer){stop(); return}
+  $('play').textContent='멈춤';
+  if(step===LAST){applyUpdate(); step=0; render()}
+  timer=setInterval(()=>{ if(step>=LAST){stop(); return} next() },1700);
+};
+$('once').onclick=()=>{stop(); applyUpdate(); step=0; render()};
+$('hundred').onclick=()=>{stop(); const L0=compute(P).L; for(let i=0;i<100;i++) applyUpdate(); lastChange=[L0,compute(P).L]; step=0; render()};
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT') return;
+  if(e.key==='ArrowRight'){stop(); next()} else if(e.key==='ArrowLeft'){stop(); prev()}
+});
+
+/* ---------- 입력 패널 ---------- */
+function field(k){return `<label for="in-${k}">${NM[k]}<input id="in-${k}" type="number" step="0.01" inputmode="decimal" data-k="${k}"></label>`}
+$('f-data').innerHTML=['x1','x2','y','lr'].map(field).join('');
+$('f-w').innerHTML=PK.map(field).join('');
+function syncInputs(){document.querySelectorAll('.fields input').forEach(i=>{if(document.activeElement!==i) i.value=+P[i.dataset.k].toFixed(6)})}
+function restart(){iter=0; lastChange=null; hist=[compute(P).L]}
+document.querySelectorAll('.fields input').forEach(inp=>inp.addEventListener('input',()=>{
+  const v=parseFloat(inp.value); if(!isFinite(v)) return;
+  if(inp.dataset.k==='y'&&(v<0||v>1)) inp.setCustomValidity('0과 1 사이'); else inp.setCustomValidity('');
+  P[inp.dataset.k]=v; stop(); restart(); render();
+}));
+$('reset').onclick=()=>{stop(); P={...DEF}; step=0; restart(); syncInputs(); render()};
+$('rand').onclick=()=>{stop(); PK.forEach(k=>P[k]=+(Math.random()*2-1).toFixed(2)); step=0; restart(); syncInputs(); render()};
+
+build(); buildTimeline(); restart(); syncInputs(); render();
+</script>
+
+</body></html>
